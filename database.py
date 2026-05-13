@@ -2,7 +2,7 @@
 import sqlite3
 from datetime import datetime
 from typing import Optional, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass
 class ScheduledPost:
@@ -13,6 +13,7 @@ class ScheduledPost:
     file_type: Optional[str]
     scheduled_time: datetime
     status: str
+    created_at: str = ""
 
 class Database:
     def __init__(self, db_path: str):

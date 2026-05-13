@@ -118,6 +118,9 @@ async def handle_message(message: Message):
         return
     state = waiting_for_time[uid]
     if state == "time":
+        if not message.text:
+            await message.answer("❌ Отправьте время текстом. Формат: DD.MM.YYYY HH:MM")
+            return
         dt = parse_time(message.text)
         if not dt:
             await message.answer("❌ Неверный формат времени. Попробуйте: DD.MM.YYYY HH:MM")
