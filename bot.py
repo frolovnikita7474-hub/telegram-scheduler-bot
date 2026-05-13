@@ -2,7 +2,7 @@ import logging
 import threading
 import os
 import asyncio
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F
@@ -173,7 +173,8 @@ async def handle_message(message: Message):
         return
 
     if waiting == "content":
-        content = message.text if message.text != "/skip" else ""
+        content = (message.caption or message.text or "")
+        content = "" if content == "/skip" else content
         file_id, file_type = None, None
         if message.photo:
             file_id = message.photo[-1].file_id
@@ -209,6 +210,8 @@ async def publish_loop():
     while True:
         try:
             posts = db.get_due_posts()
+            if posts:
+                logger.info(f"Found {len(posts)} due post(s)")
             for post in posts:
                 try:
                     if post.file_type == "photo" and post.file_id:
