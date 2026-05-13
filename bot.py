@@ -2,15 +2,16 @@ import logging
 import threading
 import time
 import os
+import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, InputMediaPhoto
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import Config
 from database import Database
@@ -22,7 +23,7 @@ config = Config()
 bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 db = Database("bot.db")
-scheduler = BackgroundScheduler()
+scheduler = AsyncIOScheduler()
 
 def parse_time(time_str: str) -> Optional[datetime]:
     offset = timedelta(hours=config.TIMEZONE_OFFSET)
@@ -151,24 +152,18 @@ async def handle_message(message: Message):
         del waiting_for_time[uid]
         await message.answer(f"✅ Пост #{post_id} запланирован на {dt.strftime('%d.%m.%Y %H:%M')}")
 
-def publish_scheduled():
+async def publish_scheduled():
     posts = db.get_due_posts()
     for post in posts:
         try:
             if post.file_type == "photo" and post.file_id:
-                from aiogram.types import InputMediaPhoto
-                media = [InputMediaPhoto(media=post.file_id, caption=post.content or "")]
-                import asyncio
-                asyncio.run(bot.send_media_group(chat_id=config.CHANNEL_ID, media=media))
+                await bot.send_photo(chat_id=config.CHANNEL_ID, photo=post.file_id, caption=post.content or "")
             elif post.file_type == "video" and post.file_id:
-                import asyncio
-                asyncio.run(bot.send_video(chat_id=config.CHANNEL_ID, video=post.file_id, caption=post.content or ""))
+                await bot.send_video(chat_id=config.CHANNEL_ID, video=post.file_id, caption=post.content or "")
             elif post.file_type == "document" and post.file_id:
-                import asyncio
-                asyncio.run(bot.send_document(chat_id=config.CHANNEL_ID, document=post.file_id, caption=post.content or ""))
+                await bot.send_document(chat_id=config.CHANNEL_ID, document=post.file_id, caption=post.content or "")
             else:
-                import asyncio
-                asyncio.run(bot.send_message(chat_id=config.CHANNEL_ID, text=post.content or "📌 Пост"))
+                await bot.send_message(chat_id=config.CHANNEL_ID, text=post.content or "📌 Пост")
             db.mark_post_sent(post.id)
             logger.info(f"Published post {post.id}")
         except Exception as e:
@@ -191,9 +186,14 @@ def run_health_server():
     with socketserver.TCPServer(("", port), Handler) as httpd:
         httpd.serve_forever()
 
-import threading
 threading.Thread(target=run_health_server, daemon=True).start()
+
+async def on_startup():
+    scheduler.add_job(publish_scheduled, "interval", seconds=30)
+    scheduler.start()
+    logger.info("Scheduler started")
 
 if __name__ == "__main__":
     logger.info("Bot starting...")
+    dp.startup.register(on_startup)
     dp.run_polling(bot)
