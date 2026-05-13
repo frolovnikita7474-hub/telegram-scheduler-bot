@@ -244,6 +244,13 @@ def run_health_server():
 threading.Thread(target=run_health_server, daemon=True).start()
 
 async def on_startup():
+    await bot.set_my_commands([
+        ("schedule", "Запланировать пост"),
+        ("now", "Моментальная публикация"),
+        ("list", "Список запланированных постов"),
+        ("delete", "Удалить пост по ID"),
+        ("cancel", "Отменить создание"),
+    ])
     asyncio.create_task(publish_loop())
     logger.info("Publish loop started")
 
