@@ -37,6 +37,7 @@ async def cmd_start(message: Message):
 
 📋 <b>Команды:</b>
 /schedule — запланировать пост (пошагово)
+/now — моментальная публикация
 /list — список запланированных постов
 /delete [id] — удалить пост
 /cancel — отменить текущее создание
@@ -120,6 +121,15 @@ async def cmd_cancel(message: Message):
     sessions.pop(uid, None)
     await message.answer("❌ Отменено")
 
+@dp.message(Command("now"))
+async def cmd_now(message: Message):
+    if message.from_user.id != config.ADMIN_ID:
+        await message.answer("⛔ Доступ только для администратора")
+        return
+    uid = message.from_user.id
+    sessions[uid] = {"now": True, "waiting": "content"}
+    await message.answer("📝 Отправьте текст или медиа для <b>моментальной</b> публикации:")
+
 @dp.message()
 async def handle_message(message: Message):
     uid = message.from_user.id
@@ -163,7 +173,6 @@ async def handle_message(message: Message):
         return
 
     if waiting == "content":
-        dt = s["dt"]
         content = message.text if message.text != "/skip" else ""
         file_id, file_type = None, None
         if message.photo:
@@ -175,6 +184,22 @@ async def handle_message(message: Message):
         elif message.document:
             file_id = message.document.file_id
             file_type = "document"
+        if s.get("now"):
+            try:
+                if file_type == "photo":
+                    await bot.send_photo(chat_id=config.CHANNEL_ID, photo=file_id, caption=content or "")
+                elif file_type == "video":
+                    await bot.send_video(chat_id=config.CHANNEL_ID, video=file_id, caption=content or "")
+                elif file_type == "document":
+                    await bot.send_document(chat_id=config.CHANNEL_ID, document=file_id, caption=content or "")
+                else:
+                    await bot.send_message(chat_id=config.CHANNEL_ID, text=content or "📌 Пост")
+                await message.answer("✅ Опубликовано мгновенно!")
+            except Exception as e:
+                await message.answer(f"❌ Ошибка публикации: {e}")
+            sessions.pop(uid, None)
+            return
+        dt = s["dt"]
         post_id = db.add_post(uid, content, file_id, file_type, dt)
         sessions.pop(uid, None)
         await message.answer(f"✅ Пост #{post_id} запланирован на {datetime.fromisoformat(str(dt)).strftime('%d.%m.%Y %H:%M')}")
