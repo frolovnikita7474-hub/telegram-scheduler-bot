@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -175,6 +176,23 @@ def publish_scheduled():
 
 scheduler.add_job(publish_scheduled, "interval", seconds=30)
 scheduler.start()
+
+def run_health_server():
+    import http.server
+    import socketserver
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        def log_message(self, *a):
+            pass
+    port = int(os.getenv("PORT", "10000"))
+    with socketserver.TCPServer(("", port), Handler) as httpd:
+        httpd.serve_forever()
+
+import threading
+threading.Thread(target=run_health_server, daemon=True).start()
 
 if __name__ == "__main__":
     logger.info("Bot starting...")
