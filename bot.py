@@ -2,12 +2,12 @@ import logging
 import threading
 import os
 import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from typing import Optional
 
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, InputMediaPhoto
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
@@ -22,30 +22,10 @@ bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseM
 dp = Dispatcher()
 db = Database("bot.db")
 
-def parse_time(time_str: str) -> Optional[datetime]:
-    offset = timedelta(hours=config.TIMEZONE_OFFSET)
-    tz = timezone(offset)
-    now_local = datetime.now(tz)
-    formats = [
-        ("%d.%m.%Y %H:%M", "15.06.2025 14:30"),
-        ("%d.%m.%Y %H:%M:%S", "15.06.2025 14:30:00"),
-        ("%Y-%m-%d %H:%M", "2025-06-15 14:30"),
-        ("%H:%M", "14:30"),
-    ]
-    for fmt, example in formats:
-        try:
-            dt_naive = datetime.strptime(time_str.strip(), fmt)
-            if fmt == "%H:%M":
-                dt_local = now_local.replace(hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0)
-            else:
-                dt_local = dt_naive.replace(tzinfo=tz)
-            if fmt == "%H:%M" and dt_local <= now_local:
-                dt_local += timedelta(days=1)
-            dt_utc = dt_local.astimezone(timezone.utc).replace(tzinfo=None)
-            return dt_utc
-        except ValueError:
-            continue
-    return None
+OFFSET = timedelta(hours=config.TIMEZONE_OFFSET)
+TZ = timezone(OFFSET)
+
+sessions = {}
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
@@ -56,26 +36,52 @@ async def cmd_start(message: Message):
 👋 <b>Бот запланированной публикации</b>
 
 📋 <b>Команды:</b>
-/schedule [время] — запланировать пост
+/schedule — запланировать пост (пошагово)
 /list — список запланированных постов
 /delete [id] — удалить пост
 /cancel — отменить текущее создание
-
-📌 <b>Формат времени:</b>
-• 14:30 (сегодня)
-• 15.06.2025 14:30
-• 2025-06-15 14:30
 """)
-
-waiting_for_time = {}
 
 @dp.message(Command("schedule"))
 async def cmd_schedule(message: Message):
     if message.from_user.id != config.ADMIN_ID:
         await message.answer("⛔ Доступ только для администратора")
         return
-    await message.answer("🕐 Отправьте время публикации\nформат: <code>DD.MM.YYYY HH:MM</code>")
-    waiting_for_time[message.from_user.id] = "time"
+    uid = message.from_user.id
+    sessions[uid] = {}
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📅 Сегодня", callback_data="date_today"),
+         InlineKeyboardButton(text="📅 Завтра", callback_data="date_tomorrow")],
+        [InlineKeyboardButton(text="📅 Послезавтра", callback_data="date_dayafter"),
+         InlineKeyboardButton(text="✏️ Другая дата", callback_data="date_custom")],
+    ])
+    await message.answer("📆 <b>Выберите дату:</b>", reply_markup=kb)
+
+@dp.callback_query(F.data.startswith("date_"))
+async def cb_date(call: CallbackQuery):
+    uid = call.from_user.id
+    if uid not in sessions:
+        await call.answer("❌ Сессия устарела, начните заново /schedule")
+        return
+    now = datetime.now(TZ)
+    if call.data == "date_today":
+        sessions[uid]["dt_local"] = now
+        await ask_time(call)
+    elif call.data == "date_tomorrow":
+        sessions[uid]["dt_local"] = now + timedelta(days=1)
+        await ask_time(call)
+    elif call.data == "date_dayafter":
+        sessions[uid]["dt_local"] = now + timedelta(days=2)
+        await ask_time(call)
+    elif call.data == "date_custom":
+        sessions[uid]["waiting"] = "custom_date"
+        await call.message.edit_text("📆 Введите дату в формате <code>ДД.ММ.ГГГГ</code>\nНапример: <code>15.06.2025</code>")
+
+async def ask_time(call: CallbackQuery):
+    uid = call.from_user.id
+    sessions[uid]["waiting"] = "time"
+    dt = sessions[uid]["dt_local"]
+    await call.message.edit_text(f"✅ Дата: {dt.strftime('%d.%m.%Y')}\n\n🕐 Теперь введите <b>время</b> в формате <code>ЧЧ:ММ</code>")
 
 @dp.message(Command("list"))
 async def cmd_list(message: Message):
@@ -89,7 +95,8 @@ async def cmd_list(message: Message):
     text = "📋 <b>Запланированные посты:</b>\n\n"
     for p in posts:
         dt = datetime.fromisoformat(p.scheduled_time)
-        text += f"🆔 <code>{p.id}</code> — {dt.strftime('%d.%m.%Y %H:%M')}\n"
+        local = dt.replace(tzinfo=timezone.utc).astimezone(TZ)
+        text += f"🆔 <code>{p.id}</code> — {local.strftime('%d.%m.%Y %H:%M')}\n"
         if p.content:
             text += f"   {p.content[:50]}...\n"
         text += "\n"
@@ -110,8 +117,7 @@ async def cmd_delete(message: Message):
 @dp.message(Command("cancel"))
 async def cmd_cancel(message: Message):
     uid = message.from_user.id
-    if uid in waiting_for_time:
-        del waiting_for_time[uid]
+    sessions.pop(uid, None)
     await message.answer("❌ Отменено")
 
 @dp.message()
@@ -119,21 +125,45 @@ async def handle_message(message: Message):
     uid = message.from_user.id
     if uid != config.ADMIN_ID:
         return
-    if uid not in waiting_for_time:
+    if uid not in sessions:
         return
-    state = waiting_for_time[uid]
-    if state == "time":
+    s = sessions[uid]
+    waiting = s.get("waiting")
+
+    if waiting == "custom_date":
         if not message.text:
-            await message.answer("❌ Отправьте время текстом. Формат: DD.MM.YYYY HH:MM")
+            await message.answer("❌ Отправьте дату текстом. Формат: ДД.ММ.ГГГГ")
             return
-        dt = parse_time(message.text)
-        if not dt:
-            await message.answer("❌ Неверный формат времени. Попробуйте: DD.MM.YYYY HH:MM")
+        try:
+            dt_local = datetime.strptime(message.text.strip(), "%d.%m.%Y").replace(tzinfo=TZ)
+        except ValueError:
+            await message.answer("❌ Неверный формат. Используйте <code>ДД.ММ.ГГГГ</code>")
             return
-        waiting_for_time[uid] = ("content", dt)
-        await message.answer(f"✅ Время: {dt.strftime('%d.%m.%Y %H:%M')}\n\n📝 Теперь отправьте текст поста (или /skip для пустого)")
-    elif state[0] == "content":
-        dt = state[1]
+        s["dt_local"] = dt_local
+        s["waiting"] = "time"
+        await message.answer(f"✅ Дата: {dt_local.strftime('%d.%m.%Y')}\n\n🕐 Теперь введите <b>время</b> в формате <code>ЧЧ:ММ</code>")
+        return
+
+    if waiting == "time":
+        if not message.text:
+            await message.answer("❌ Отправьте время текстом. Формат: ЧЧ:ММ")
+            return
+        try:
+            t = datetime.strptime(message.text.strip(), "%H:%M")
+            dt_local = s["dt_local"].replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+        except ValueError:
+            await message.answer("❌ Неверный формат. Используйте <code>ЧЧ:ММ</code>")
+            return
+        if dt_local <= datetime.now(TZ):
+            dt_local += timedelta(days=1)
+        s["dt"] = dt_local.astimezone(timezone.utc).replace(tzinfo=None)
+        s["waiting"] = "content"
+        tz_sign = "+" if config.TIMEZONE_OFFSET >= 0 else ""
+        await message.answer(f"✅ Время: {dt_local.strftime('%d.%m.%Y %H:%M')} (UTC{tz_sign}{config.TIMEZONE_OFFSET})\n\n📝 Теперь отправьте текст поста (или <code>/skip</code> для пустого)")
+        return
+
+    if waiting == "content":
+        dt = s["dt"]
         content = message.text if message.text != "/skip" else ""
         file_id, file_type = None, None
         if message.photo:
@@ -146,8 +176,8 @@ async def handle_message(message: Message):
             file_id = message.document.file_id
             file_type = "document"
         post_id = db.add_post(uid, content, file_id, file_type, dt)
-        del waiting_for_time[uid]
-        await message.answer(f"✅ Пост #{post_id} запланирован на {dt.strftime('%d.%m.%Y %H:%M')}")
+        sessions.pop(uid, None)
+        await message.answer(f"✅ Пост #{post_id} запланирован на {datetime.fromisoformat(str(dt)).strftime('%d.%m.%Y %H:%M')}")
 
 async def publish_loop():
     await asyncio.sleep(5)
