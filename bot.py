@@ -7,7 +7,7 @@ from typing import Optional
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
@@ -248,11 +248,11 @@ threading.Thread(target=run_health_server, daemon=True).start()
 
 async def on_startup():
     await bot.set_my_commands([
-        ("schedule", "Запланировать пост"),
-        ("now", "Моментальная публикация"),
-        ("list", "Список запланированных постов"),
-        ("delete", "Удалить пост по ID"),
-        ("cancel", "Отменить создание"),
+        BotCommand(command="schedule", description="Запланировать пост"),
+        BotCommand(command="now", description="Моментальная публикация"),
+        BotCommand(command="list", description="Список запланированных постов"),
+        BotCommand(command="delete", description="Удалить пост по ID"),
+        BotCommand(command="cancel", description="Отменить создание"),
     ])
     asyncio.create_task(publish_loop())
     logger.info("Publish loop started")
