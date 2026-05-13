@@ -1,7 +1,7 @@
 import logging
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, types
@@ -24,6 +24,9 @@ db = Database("bot.db")
 scheduler = BackgroundScheduler()
 
 def parse_time(time_str: str) -> Optional[datetime]:
+    offset = timedelta(hours=config.TIMEZONE_OFFSET)
+    tz = timezone(offset)
+    now_local = datetime.now(tz)
     formats = [
         ("%d.%m.%Y %H:%M", "15.06.2025 14:30"),
         ("%d.%m.%Y %H:%M:%S", "15.06.2025 14:30:00"),
@@ -32,12 +35,15 @@ def parse_time(time_str: str) -> Optional[datetime]:
     ]
     for fmt, example in formats:
         try:
-            dt = datetime.strptime(time_str.strip(), fmt)
+            dt_naive = datetime.strptime(time_str.strip(), fmt)
             if fmt == "%H:%M":
-                dt = datetime.now().replace(hour=dt.hour, minute=dt.minute, second=0)
-                if dt < datetime.now():
-                    dt += timedelta(days=1)
-            return dt
+                dt_local = now_local.replace(hour=dt_naive.hour, minute=dt_naive.minute, second=0, microsecond=0)
+            else:
+                dt_local = dt_naive.replace(tzinfo=tz)
+            if fmt == "%H:%M" and dt_local <= now_local:
+                dt_local += timedelta(days=1)
+            dt_utc = dt_local.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt_utc
         except ValueError:
             continue
     return None
